@@ -244,11 +244,32 @@ class MediaServerHealthChecker:
                         ram_icon = "🔴" if ram_pct >= 90 else "✅"
                         lines.append(f"{ram_icon} RAM: {ram_pct:.0f}%")
 
+                stdout, _, _ = ssh._exec("free -m | grep Swap")
+                if stdout:
+                    parts = stdout.split()
+                    if len(parts) >= 3:
+                        swap_total = int(parts[1])
+                        swap_used = int(parts[2])
+                        if swap_total > 0:
+                            swap_pct = swap_used / swap_total * 100
+                            swap_icon = "🔴" if swap_pct >= 95 else "✅"
+                            lines.append(f"{swap_icon} Swap: {swap_pct:.0f}%")
+
                 stdout, _, _ = ssh._exec("cat /proc/loadavg")
                 if stdout:
                     load = stdout.split()[1]
                     load_icon = "🔴" if float(load) >= 4 else "✅"
                     lines.append(f"{load_icon} Load: {load}")
+
+                # Temperature
+                stdout, _, _ = ssh._exec("cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null")
+                if stdout.strip():
+                    try:
+                        temp = int(stdout.strip()) / 1000
+                        temp_icon = "🔴" if temp >= 80 else "✅"
+                        lines.append(f"{temp_icon} Temp: {temp:.0f}°C")
+                    except ValueError:
+                        pass
 
                 # Docker containers
                 stdout, _, _ = ssh._exec("docker ps -q | wc -l")
@@ -269,10 +290,22 @@ class MediaServerHealthChecker:
                     vm_icon = "✅" if "running" in stdout else "🔴"
                     lines.append(f"{vm_icon} VM: {vm_name}")
 
+                # Transmission
+                if self.transmission:
+                    downloading, seeding = self.transmission.get_active_count()
+                    lines.append(f"📥 Torrents: {downloading} downloading, {seeding} seeding")
+
         except Exception as e:
             lines.append(f"❌ Error: {e}")
 
         return "\n".join(lines)
+
+    async def send_startup_status(self) -> None:
+        """Send comprehensive startup status notification."""
+        status = await self.get_full_status()
+        # Replace the header for startup
+        status = status.replace("📊 <b>System Status</b>", "🟢 <b>Health Checker Started</b>")
+        await self.bot.send_message(status)
 
     async def check_system(self) -> None:
         """Check system resources."""
@@ -435,18 +468,13 @@ class MediaServerHealthChecker:
         await self.bot.start()
         logger.info("Telegram bot started")
 
-        # Send startup message
-        await self.bot.send_message(
-            "🟢 Media Server Health Checker started.\n"
-            f"Monitoring disk at {self.config['ssh']['host']}\n"
-            f"Threshold: {self.config['monitor']['threshold']}%\n"
-            f"Check interval: {self.config['monitor']['check_interval']}s"
-        )
+        # Send comprehensive startup status
+        await self.send_startup_status()
 
         self._running = True
         check_interval = self.config["monitor"]["check_interval"]
 
-        # Run initial checks on startup
+        # Run initial checks to initialize monitor states (they won't send messages on first run)
         if self.transmission:
             await self.check_transmission()
         if self.docker_monitor:
