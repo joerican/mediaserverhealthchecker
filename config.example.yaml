@@ -1,0 +1,15 @@
+ssh:
+  host: "media.local"
+  port: 22
+  username: "rican"
+  key_path: "~/.ssh/id_ed25519_mediaserver"
+
+telegram:
+  bot_token: "YOUR_BOT_TOKEN_HERE"
+  chat_id: "YOUR_CHAT_ID_HERE"
+
+monitor:
+  threshold: 80
+  check_interval: 300
+  downloads_path: "/home/rican/Downloads/completed"
+  alert_cooldown: 3600
