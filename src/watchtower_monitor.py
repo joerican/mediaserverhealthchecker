@@ -150,22 +150,9 @@ class WatchtowerMonitor:
                 ))
                 self.state.notified_updates.add(key)
 
-        # First run - just report summary
+        # First run - initialize silently (no startup message)
         if self.state.first_run:
             self.state.first_run = False
-            # Count recent updates
-            update_count = len([u for u in updates])
-            error_count = len([e for e in errors])
-
-            summary = "🐋 <b>Watchtower Monitor Started</b>\n\n"
-            if update_count > 0:
-                summary += f"📦 {update_count} container(s) updated in last 6h\n"
-            if error_count > 0:
-                summary += f"⚠️ {error_count} update error(s) in last 6h"
-            if update_count == 0 and error_count == 0:
-                summary += "No recent updates"
-
-            messages.append(summary)
             return messages
 
         # Report new updates

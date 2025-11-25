@@ -222,6 +222,58 @@ class MediaServerHealthChecker:
                 return False, str(e)
         return False, f"Unknown action: {action}"
 
+    async def get_full_status(self) -> str:
+        """Get full system status for /status command."""
+        lines = ["📊 <b>System Status</b>\n"]
+
+        try:
+            with SSHClient(**self._ssh_config) as ssh:
+                # Disk usage
+                usage = ssh.get_disk_usage("/")
+                disk_icon = "🔴" if usage >= self.config["monitor"]["threshold"] else "✅"
+                lines.append(f"{disk_icon} Disk: {usage}%")
+
+                # System stats
+                stdout, _, _ = ssh._exec("free -m | grep Mem")
+                if stdout:
+                    parts = stdout.split()
+                    if len(parts) >= 3:
+                        ram_total = int(parts[1])
+                        ram_used = int(parts[2])
+                        ram_pct = ram_used / ram_total * 100
+                        ram_icon = "🔴" if ram_pct >= 90 else "✅"
+                        lines.append(f"{ram_icon} RAM: {ram_pct:.0f}%")
+
+                stdout, _, _ = ssh._exec("cat /proc/loadavg")
+                if stdout:
+                    load = stdout.split()[1]
+                    load_icon = "🔴" if float(load) >= 4 else "✅"
+                    lines.append(f"{load_icon} Load: {load}")
+
+                # Docker containers
+                stdout, _, _ = ssh._exec("docker ps -q | wc -l")
+                running = stdout.strip() if stdout else "?"
+                stdout, _, _ = ssh._exec("docker ps -aq | wc -l")
+                total = stdout.strip() if stdout else "?"
+                lines.append(f"🐳 Docker: {running}/{total} running")
+
+                # Mount check
+                for mount_path in self.config.get("mounts", {}).get("paths", []):
+                    stdout, _, code = ssh._exec(f"mountpoint -q '{mount_path}' && echo 'ok'")
+                    mount_icon = "✅" if stdout.strip() == "ok" else "🔴"
+                    lines.append(f"{mount_icon} Mount: {mount_path}")
+
+                # VM check
+                for vm_name in self.config.get("vm", {}).get("vms", []):
+                    stdout, _, _ = ssh._exec(f"VBoxManage list runningvms | grep -q '{vm_name}' && echo 'running'")
+                    vm_icon = "✅" if "running" in stdout else "🔴"
+                    lines.append(f"{vm_icon} VM: {vm_name}")
+
+        except Exception as e:
+            lines.append(f"❌ Error: {e}")
+
+        return "\n".join(lines)
+
     async def check_system(self) -> None:
         """Check system resources."""
         if not self.system_monitor:
@@ -311,6 +363,7 @@ class MediaServerHealthChecker:
             delete_callback=self._delete_file,
             refresh_callback=self._refresh_list,
             github_action_callback=self.handle_github_action,
+            status_callback=self.get_full_status,
         )
 
         # Initialize Transmission watcher if configured
@@ -326,7 +379,8 @@ class MediaServerHealthChecker:
         docker_config = self.config.get("docker", {})
         if docker_config.get("enabled"):
             self.docker_monitor = DockerMonitor(
-                ssh_client_factory=self._get_ssh_client
+                ssh_client_factory=self._get_ssh_client,
+                ignore_containers=docker_config.get("ignore", []),
             )
             logger.info("Docker monitor initialized")
 

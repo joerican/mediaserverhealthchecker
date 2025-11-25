@@ -132,10 +132,9 @@ class SystemMonitor:
         if not stats:
             return []
 
-        # First run - report status
+        # First run - initialize state silently (no startup message)
         if self.state.first_run:
             self.state.first_run = False
-            messages.append(self._get_status_summary(stats))
 
             # Initialize alert states based on current values
             self.state.last_ram_alert = stats.ram_percent >= self.ram_threshold

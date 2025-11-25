@@ -33,15 +33,16 @@ class DockerMonitorState:
 class DockerMonitor:
     """Monitors Docker containers via SSH."""
 
-    def __init__(self, ssh_client_factory):
+    def __init__(self, ssh_client_factory, ignore_containers: list[str] = None):
         """
         Args:
             ssh_client_factory: Callable that returns an SSHClient context manager
+            ignore_containers: List of container names to ignore alerts for
         """
         self.ssh_client_factory = ssh_client_factory
         self.state = DockerMonitorState()
         # Containers to ignore (known to restart frequently or not important)
-        self.ignore_containers: set[str] = set()
+        self.ignore_containers: set[str] = set(ignore_containers or [])
 
     def _get_containers(self) -> list[ContainerState]:
         """Get list of all containers and their states."""
@@ -106,12 +107,9 @@ class DockerMonitor:
             logger.error(f"Failed to check containers: {e}")
             return [f"❌ Failed to check Docker containers: {e}"]
 
-        # First run - just report status
+        # First run - initialize state silently (no startup message)
         if self.state.first_run:
             self.state.first_run = False
-            summary = self._get_status_summary(containers)
-            if summary:
-                messages.append(summary)
 
             # Initialize state
             for c in containers:

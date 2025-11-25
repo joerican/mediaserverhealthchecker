@@ -112,12 +112,9 @@ class VMMonitor:
         if not vms:
             return []
 
-        # First run - just report status
+        # First run - initialize state silently (no startup message)
         if self.state.first_run:
             self.state.first_run = False
-            summary = self._get_status_summary(vms)
-            if summary:
-                messages.append(summary)
 
             # Initialize state
             for vm in vms:

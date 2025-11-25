@@ -51,12 +51,9 @@ class TransmissionWatcher:
             logger.error(f"Failed to get torrents: {e}")
             return [f"❌ Failed to connect to Transmission: {e}"]
 
-        # First run - just report status
+        # First run - initialize state silently (no startup message)
         if self.state.first_run:
             self.state.first_run = False
-            status_msg = self._get_status_summary(torrents)
-            if status_msg:
-                messages.append(status_msg)
             # Initialize state for existing torrents
             for t in torrents:
                 if t.is_complete:

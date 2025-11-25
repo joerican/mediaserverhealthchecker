@@ -26,6 +26,7 @@ class TelegramBot:
         delete_callback: Optional[Callable[[str], tuple[bool, str]]] = None,
         refresh_callback: Optional[Callable[[str], tuple[list, int]]] = None,
         github_action_callback: Optional[Callable[[str], tuple[bool, str]]] = None,
+        status_callback: Optional[Callable[[], str]] = None,
     ):
         self.token = token
         self.chat_id = chat_id
@@ -33,6 +34,7 @@ class TelegramBot:
         self.delete_callback = delete_callback
         self.refresh_callback = refresh_callback  # Returns (entries, usage) for a path
         self.github_action_callback = github_action_callback  # Handle GitHub actions
+        self.status_callback = status_callback  # Get full system status
         self._app: Optional[Application] = None
         self._pending_deletions: dict[str, str] = {}  # callback_id -> path
         self._pending_paths: dict[str, str] = {}  # callback_id -> downloads_path
@@ -43,7 +45,7 @@ class TelegramBot:
         self._app = Application.builder().token(self.token).build()
 
         # Add handlers
-        self._app.add_handler(CommandHandler("disk_status", self._cmd_status))
+        self._app.add_handler(CommandHandler("status", self._cmd_status))
         self._app.add_handler(CommandHandler("disk_list", self._cmd_list))
         self._app.add_handler(CallbackQueryHandler(self._handle_callback))
 
@@ -264,11 +266,12 @@ class TelegramBot:
     async def _cmd_status(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle /disk_status command."""
-        # This will be handled by the main app
-        await update.message.reply_text(
-            "Status check requested. Please wait..."
-        )
+        """Handle /status command."""
+        if self.status_callback:
+            status = await self.status_callback()
+            await update.message.reply_text(status, parse_mode="HTML")
+        else:
+            await update.message.reply_text("Status not available.")
 
     async def _cmd_list(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE

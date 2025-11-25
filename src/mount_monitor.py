@@ -120,10 +120,9 @@ class MountMonitor:
                     is_accessible=False,
                 ))
 
-        # First run - report status
+        # First run - initialize state silently (no startup message)
         if self.state.first_run:
             self.state.first_run = False
-            messages.append(self._get_status_summary(mount_infos))
 
             for info in mount_infos:
                 self.state.mount_status[info.path] = info.is_mounted and info.is_accessible
