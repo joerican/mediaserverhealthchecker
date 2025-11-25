@@ -14,6 +14,7 @@ from .telegram_bot import TelegramBot
 from .transmission_watcher import TransmissionWatcher
 from .docker_monitor import DockerMonitor
 from .vm_monitor import VMMonitor
+from .github_monitor import GitHubMonitor
 from .log_rotation import rotate_logs, cleanup_old_logs
 
 logging.basicConfig(
@@ -36,6 +37,7 @@ class MediaServerHealthChecker:
         self.transmission: Optional[TransmissionWatcher] = None
         self.docker_monitor: Optional[DockerMonitor] = None
         self.vm_monitor: Optional[VMMonitor] = None
+        self.github_monitor: Optional[GitHubMonitor] = None
         self._running = False
         self._ssh_config = {
             "host": self.config["ssh"]["host"],
@@ -150,6 +152,19 @@ class MediaServerHealthChecker:
         except Exception as e:
             logger.error(f"Error checking VMs: {e}")
 
+    async def check_github(self) -> None:
+        """Check GitHub issues for updates."""
+        if not self.github_monitor:
+            return
+
+        try:
+            messages = self.github_monitor.check_issues()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"GitHub: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking GitHub: {e}")
+
     async def check_disk(self) -> None:
         """Perform a single disk check."""
         try:
@@ -227,6 +242,14 @@ class MediaServerHealthChecker:
             )
             logger.info("VM monitor initialized")
 
+        # Initialize GitHub monitor if configured
+        github_config = self.config.get("github", {})
+        if github_config.get("enabled") and github_config.get("issues"):
+            self.github_monitor = GitHubMonitor(
+                issues_to_monitor=github_config.get("issues", []),
+            )
+            logger.info("GitHub monitor initialized")
+
         # Start bot
         await self.bot.start()
         logger.info("Telegram bot started")
@@ -249,6 +272,8 @@ class MediaServerHealthChecker:
             await self.check_docker()
         if self.vm_monitor:
             await self.check_vm()
+        if self.github_monitor:
+            await self.check_github()
 
         try:
             while self._running:
@@ -256,6 +281,7 @@ class MediaServerHealthChecker:
                 await self.check_transmission()
                 await self.check_docker()
                 await self.check_vm()
+                await self.check_github()
                 await asyncio.sleep(check_interval)
         except asyncio.CancelledError:
             logger.info("Monitoring cancelled")
