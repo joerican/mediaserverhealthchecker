@@ -37,17 +37,39 @@ class MediaServerHealthChecker:
             "port": self.config["ssh"]["port"],
         }
 
+    def _get_downloads_paths(self) -> list[str]:
+        """Get list of download paths from config."""
+        paths = self.config["monitor"].get("downloads_paths")
+        if paths:
+            return paths
+        # Fallback to single path for backwards compatibility
+        single_path = self.config["monitor"].get("downloads_path")
+        return [single_path] if single_path else []
+
     def _delete_file(self, path: str) -> tuple[bool, str]:
         """Delete a file via SSH."""
         try:
             with SSHClient(**self._ssh_config) as ssh:
-                return ssh.delete_path(
-                    path,
-                    self.config["monitor"]["downloads_path"],
-                )
+                # Check against all allowed paths
+                for base_path in self._get_downloads_paths():
+                    if path.startswith(base_path):
+                        return ssh.delete_path(path, base_path)
+                return False, "Path not in allowed directories"
         except Exception as e:
             logger.error(f"Failed to delete {path}: {e}")
             return False, str(e)
+
+    def _refresh_list(self, downloads_path: str) -> tuple[list, int]:
+        """Get updated file list and disk usage."""
+        try:
+            with SSHClient(**self._ssh_config) as ssh:
+                usage = ssh.get_disk_usage("/")
+                min_size = self.config["monitor"].get("min_size_mb", 500) * 1024 * 1024
+                entries = ssh.list_directory_sizes(downloads_path, min_size_bytes=min_size)
+                return entries, usage
+        except Exception as e:
+            logger.error(f"Failed to refresh list: {e}")
+            return [], 0
 
     async def check_disk(self) -> None:
         """Perform a single disk check."""
@@ -58,14 +80,19 @@ class MediaServerHealthChecker:
 
                 if self.monitor.should_alert(usage):
                     logger.warning(f"Disk usage threshold exceeded: {usage}%")
-                    entries = ssh.list_directory_sizes(
-                        self.config["monitor"]["downloads_path"]
-                    )
-                    await self.bot.send_alert(
-                        usage,
-                        entries,
-                        self.config["monitor"]["downloads_path"],
-                    )
+                    min_size = self.config["monitor"].get("min_size_mb", 500) * 1024 * 1024
+
+                    for downloads_path in self._get_downloads_paths():
+                        entries = ssh.list_directory_sizes(
+                            downloads_path,
+                            min_size_bytes=min_size,
+                        )
+                        if entries:
+                            await self.bot.send_alert(
+                                usage,
+                                entries,
+                                downloads_path,
+                            )
         except Exception as e:
             logger.error(f"Error checking disk: {e}")
 
@@ -86,7 +113,9 @@ class MediaServerHealthChecker:
         self.bot = TelegramBot(
             token=self.config["telegram"]["bot_token"],
             chat_id=self.config["telegram"]["chat_id"],
+            topic_id=self.config["telegram"].get("topic_id"),
             delete_callback=self._delete_file,
+            refresh_callback=self._refresh_list,
         )
 
         # Start bot

@@ -74,8 +74,16 @@ class SSHClient:
         # Parse percentage (e.g., " 72%")
         return int(stdout.strip().rstrip("%"))
 
-    def list_directory_sizes(self, path: str) -> list[DirEntry]:
+    def list_directory_sizes(
+        self,
+        path: str,
+        exclude: list[str] = None,
+        min_size_bytes: int = 500 * 1024 * 1024,  # 500MB default
+    ) -> list[DirEntry]:
         """List directory contents with sizes, sorted by size descending."""
+        if exclude is None:
+            exclude = ["tv-sonarr"]
+
         # Use du for directories, ls for files
         # Get all items with their sizes using du
         stdout, stderr, code = self._exec(
@@ -95,6 +103,14 @@ class SSHClient:
                 size_bytes = int(parts[0])
                 full_path = parts[1]
                 name = full_path.split("/")[-1]
+
+                # Skip excluded items
+                if name in exclude:
+                    continue
+
+                # Skip items smaller than min_size
+                if size_bytes < min_size_bytes:
+                    continue
 
                 # Check if it's a directory
                 _, _, is_dir_code = self._exec(f"test -d {full_path!r}")

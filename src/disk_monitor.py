@@ -8,6 +8,7 @@ class MonitorState:
     last_alert_time: float = 0
     last_usage: int = 0
     alert_active: bool = False
+    first_run: bool = True
 
 
 class DiskMonitor:
@@ -35,6 +36,14 @@ class DiskMonitor:
         """
         self.state.last_usage = current_usage
         now = time.time()
+
+        # First run after startup - always show status
+        if self.state.first_run:
+            self.state.first_run = False
+            self.state.last_alert_time = now
+            if current_usage >= self.threshold:
+                self.state.alert_active = True
+            return True  # Always alert on first run
 
         # Below threshold - reset alert state
         if current_usage < self.threshold:

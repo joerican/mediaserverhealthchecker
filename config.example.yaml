@@ -1,15 +1,19 @@
 ssh:
   host: "media.local"
   port: 22
-  username: "rican"
-  key_path: "~/.ssh/id_ed25519_mediaserver"
+  username: "your_username"
+  key_path: "~/.ssh/id_ed25519"
 
 telegram:
   bot_token: "YOUR_BOT_TOKEN_HERE"
   chat_id: "YOUR_CHAT_ID_HERE"
+  topic_id: null  # Optional: Telegram topic/thread ID for forum groups
 
 monitor:
   threshold: 80
   check_interval: 300
-  downloads_path: "/home/rican/Downloads/completed"
+  downloads_paths:
+    - "/path/to/downloads/completed"
+    - "/path/to/downloads/incomplete"
+  min_size_mb: 100  # Only show files larger than this
   alert_cooldown: 3600
