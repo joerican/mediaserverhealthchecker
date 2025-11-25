@@ -12,6 +12,8 @@ from .ssh_client import SSHClient
 from .disk_monitor import DiskMonitor
 from .telegram_bot import TelegramBot
 from .transmission_watcher import TransmissionWatcher
+from .docker_monitor import DockerMonitor
+from .vm_monitor import VMMonitor
 from .log_rotation import rotate_logs, cleanup_old_logs
 
 logging.basicConfig(
@@ -32,6 +34,8 @@ class MediaServerHealthChecker:
         )
         self.bot: Optional[TelegramBot] = None
         self.transmission: Optional[TransmissionWatcher] = None
+        self.docker_monitor: Optional[DockerMonitor] = None
+        self.vm_monitor: Optional[VMMonitor] = None
         self._running = False
         self._ssh_config = {
             "host": self.config["ssh"]["host"],
@@ -74,6 +78,10 @@ class MediaServerHealthChecker:
             logger.error(f"Failed to refresh list: {e}")
             return [], 0
 
+    def _get_ssh_client(self):
+        """Factory for creating SSH clients (used by monitors)."""
+        return SSHClient(**self._ssh_config)
+
     async def send_transmission_message(self, text: str) -> None:
         """Send a message to the Transmission Watcher topic."""
         transmission_topic = self.config.get("transmission", {}).get("topic_id")
@@ -85,6 +93,22 @@ class MediaServerHealthChecker:
             }
             if transmission_topic:
                 kwargs["message_thread_id"] = transmission_topic
+            await self.bot._app.bot.send_message(**kwargs)
+
+    async def send_server_health_message(self, text: str) -> None:
+        """Send a message to the Server Health topic (Docker/VM alerts)."""
+        docker_config = self.config.get("docker", {})
+        vm_config = self.config.get("vm", {})
+        # Use docker topic_id or vm topic_id (they share the same topic)
+        topic_id = docker_config.get("topic_id") or vm_config.get("topic_id")
+        if self.bot and self.bot._app:
+            kwargs = {
+                "chat_id": self.config["telegram"]["chat_id"],
+                "text": text,
+                "parse_mode": "HTML",
+            }
+            if topic_id:
+                kwargs["message_thread_id"] = topic_id
             await self.bot._app.bot.send_message(**kwargs)
 
     async def check_transmission(self) -> None:
@@ -99,6 +123,32 @@ class MediaServerHealthChecker:
                 logger.info(f"Transmission: {msg[:50]}...")
         except Exception as e:
             logger.error(f"Error checking transmission: {e}")
+
+    async def check_docker(self) -> None:
+        """Check Docker containers for issues."""
+        if not self.docker_monitor:
+            return
+
+        try:
+            messages = self.docker_monitor.check_containers()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"Docker: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking docker: {e}")
+
+    async def check_vm(self) -> None:
+        """Check VMs for issues."""
+        if not self.vm_monitor:
+            return
+
+        try:
+            messages = self.vm_monitor.check_vms()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"VM: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking VMs: {e}")
 
     async def check_disk(self) -> None:
         """Perform a single disk check."""
@@ -160,6 +210,23 @@ class MediaServerHealthChecker:
             )
             logger.info("Transmission watcher initialized")
 
+        # Initialize Docker monitor if configured
+        docker_config = self.config.get("docker", {})
+        if docker_config.get("enabled"):
+            self.docker_monitor = DockerMonitor(
+                ssh_client_factory=self._get_ssh_client
+            )
+            logger.info("Docker monitor initialized")
+
+        # Initialize VM monitor if configured
+        vm_config = self.config.get("vm", {})
+        if vm_config.get("enabled"):
+            self.vm_monitor = VMMonitor(
+                ssh_client_factory=self._get_ssh_client,
+                vms_to_monitor=vm_config.get("vms", []),
+            )
+            logger.info("VM monitor initialized")
+
         # Start bot
         await self.bot.start()
         logger.info("Telegram bot started")
@@ -175,14 +242,20 @@ class MediaServerHealthChecker:
         self._running = True
         check_interval = self.config["monitor"]["check_interval"]
 
-        # Check transmission on startup
+        # Run initial checks on startup
         if self.transmission:
             await self.check_transmission()
+        if self.docker_monitor:
+            await self.check_docker()
+        if self.vm_monitor:
+            await self.check_vm()
 
         try:
             while self._running:
                 await self.check_disk()
                 await self.check_transmission()
+                await self.check_docker()
+                await self.check_vm()
                 await asyncio.sleep(check_interval)
         except asyncio.CancelledError:
             logger.info("Monitoring cancelled")
