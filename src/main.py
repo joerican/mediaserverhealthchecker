@@ -11,6 +11,7 @@ from .config import load_config, expand_path
 from .ssh_client import SSHClient
 from .disk_monitor import DiskMonitor
 from .telegram_bot import TelegramBot
+from .transmission_watcher import TransmissionWatcher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +30,7 @@ class MediaServerHealthChecker:
             cooldown=self.config["monitor"]["alert_cooldown"],
         )
         self.bot: Optional[TelegramBot] = None
+        self.transmission: Optional[TransmissionWatcher] = None
         self._running = False
         self._ssh_config = {
             "host": self.config["ssh"]["host"],
@@ -70,6 +72,32 @@ class MediaServerHealthChecker:
         except Exception as e:
             logger.error(f"Failed to refresh list: {e}")
             return [], 0
+
+    async def send_transmission_message(self, text: str) -> None:
+        """Send a message to the Transmission Watcher topic."""
+        transmission_topic = self.config.get("transmission", {}).get("topic_id")
+        if self.bot and self.bot._app:
+            kwargs = {
+                "chat_id": self.config["telegram"]["chat_id"],
+                "text": text,
+                "parse_mode": "HTML",
+            }
+            if transmission_topic:
+                kwargs["message_thread_id"] = transmission_topic
+            await self.bot._app.bot.send_message(**kwargs)
+
+    async def check_transmission(self) -> None:
+        """Check transmission and process torrents."""
+        if not self.transmission:
+            return
+
+        try:
+            messages = self.transmission.check_torrents()
+            for msg in messages:
+                await self.send_transmission_message(msg)
+                logger.info(f"Transmission: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking transmission: {e}")
 
     async def check_disk(self) -> None:
         """Perform a single disk check."""
@@ -118,6 +146,15 @@ class MediaServerHealthChecker:
             refresh_callback=self._refresh_list,
         )
 
+        # Initialize Transmission watcher if configured
+        if self.config.get("transmission"):
+            self.transmission = TransmissionWatcher(
+                host=self.config["transmission"]["host"],
+                port=self.config["transmission"].get("port", 9091),
+                hours_until_remove=self.config["transmission"].get("hours_until_remove", 24),
+            )
+            logger.info("Transmission watcher initialized")
+
         # Start bot
         await self.bot.start()
         logger.info("Telegram bot started")
@@ -133,9 +170,14 @@ class MediaServerHealthChecker:
         self._running = True
         check_interval = self.config["monitor"]["check_interval"]
 
+        # Check transmission on startup
+        if self.transmission:
+            await self.check_transmission()
+
         try:
             while self._running:
                 await self.check_disk()
+                await self.check_transmission()
                 await asyncio.sleep(check_interval)
         except asyncio.CancelledError:
             logger.info("Monitoring cancelled")

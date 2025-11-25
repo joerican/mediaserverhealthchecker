@@ -17,3 +17,10 @@ monitor:
     - "/path/to/downloads/incomplete"
   min_size_mb: 100  # Only show files larger than this
   alert_cooldown: 3600
+
+# Optional: Transmission torrent client monitoring
+transmission:
+  host: "192.168.1.100"
+  port: 9091
+  hours_until_remove: 24  # Remove from list after this many hours
+  topic_id: null  # Optional: Separate Telegram topic for transmission alerts
