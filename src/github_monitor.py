@@ -10,6 +10,14 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class GitHubAlert:
+    """Represents a GitHub alert with optional action."""
+    message: str
+    action: Optional[str] = None  # Action identifier (e.g., "restart_auto_southwest")
+    action_label: Optional[str] = None  # Button label
+
+
+@dataclass
 class IssueState:
     """Tracks state for a monitored issue."""
     issue_url: str
@@ -66,18 +74,20 @@ class GitHubMonitor:
             logger.error(f"Failed to fetch GitHub issue {repo}#{issue_number}: {e}")
             return None
 
-    def check_issues(self) -> list[str]:
+    def check_issues(self) -> list[GitHubAlert]:
         """
         Check monitored issues for updates.
 
-        Returns list of alert messages.
+        Returns list of GitHubAlert objects.
         """
-        messages = []
+        alerts = []
 
         for issue_config in self.issues_to_monitor:
             repo = issue_config["repo"]
             issue_num = issue_config["issue"]
             name = issue_config.get("name", repo.split("/")[-1])
+            action = issue_config.get("action")  # Optional action on close
+            action_label = issue_config.get("action_label", "Restart")
             key = f"{repo}#{issue_num}"
 
             issue_state = self.state.issues.get(key)
@@ -101,29 +111,35 @@ class GitHubMonitor:
             # Check if issue was closed (potential fix!)
             if issue_state.last_state == "open" and current_state == "closed":
                 if not issue_state.notified_closed:
-                    messages.append(
+                    message = (
                         f"🎉 <b>GitHub Issue Closed!</b>\n"
                         f"📦 {name}\n"
                         f"Issue #{issue_num}: {title}\n\n"
                         f"This may indicate a fix is available!\n"
                         f"<a href='{issue_state.issue_url}'>View Issue</a>"
                     )
+                    alerts.append(GitHubAlert(
+                        message=message,
+                        action=action,
+                        action_label=action_label,
+                    ))
                     issue_state.notified_closed = True
                     logger.info(f"GitHub issue closed: {key}")
 
             # Check for significant new comments (might indicate progress)
             new_comments = comment_count - issue_state.last_comment_count
             if new_comments >= 5:  # Only alert on 5+ new comments
-                messages.append(
+                message = (
                     f"💬 <b>GitHub Issue Activity</b>\n"
                     f"📦 {name}\n"
                     f"Issue #{issue_num} has {new_comments} new comments\n"
                     f"<a href='{issue_state.issue_url}'>View Issue</a>"
                 )
+                alerts.append(GitHubAlert(message=message))
                 logger.info(f"GitHub issue activity: {key} (+{new_comments} comments)")
 
             issue_state.last_state = current_state
             issue_state.last_comment_count = comment_count
 
         self.state.first_run = False
-        return messages
+        return alerts

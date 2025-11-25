@@ -25,12 +25,14 @@ class TelegramBot:
         topic_id: Optional[int] = None,
         delete_callback: Optional[Callable[[str], tuple[bool, str]]] = None,
         refresh_callback: Optional[Callable[[str], tuple[list, int]]] = None,
+        github_action_callback: Optional[Callable[[str], tuple[bool, str]]] = None,
     ):
         self.token = token
         self.chat_id = chat_id
         self.topic_id = topic_id
         self.delete_callback = delete_callback
         self.refresh_callback = refresh_callback  # Returns (entries, usage) for a path
+        self.github_action_callback = github_action_callback  # Handle GitHub actions
         self._app: Optional[Application] = None
         self._pending_deletions: dict[str, str] = {}  # callback_id -> path
         self._pending_paths: dict[str, str] = {}  # callback_id -> downloads_path
@@ -190,6 +192,18 @@ class TelegramBot:
 
         elif callback_data == "done_cleaning":
             await query.edit_message_text("👍 Cleanup complete!")
+
+        elif callback_data.startswith("github_action_"):
+            action = callback_data.replace("github_action_", "")
+            if self.github_action_callback:
+                await query.edit_message_text("⏳ Processing action...")
+                success, message = await self.github_action_callback(action)
+                if success:
+                    await query.edit_message_text(f"✅ {message}")
+                else:
+                    await query.edit_message_text(f"❌ {message}")
+            else:
+                await query.edit_message_text("❌ Action handler not configured.")
 
     async def _send_updated_list(
         self,

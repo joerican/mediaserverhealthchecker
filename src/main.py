@@ -14,7 +14,7 @@ from .telegram_bot import TelegramBot
 from .transmission_watcher import TransmissionWatcher
 from .docker_monitor import DockerMonitor
 from .vm_monitor import VMMonitor
-from .github_monitor import GitHubMonitor
+from .github_monitor import GitHubMonitor, GitHubAlert
 from .log_rotation import rotate_logs, cleanup_old_logs
 
 logging.basicConfig(
@@ -158,12 +158,63 @@ class MediaServerHealthChecker:
             return
 
         try:
-            messages = self.github_monitor.check_issues()
-            for msg in messages:
-                await self.send_server_health_message(msg)
-                logger.info(f"GitHub: {msg[:50]}...")
+            alerts = self.github_monitor.check_issues()
+            for alert in alerts:
+                await self.send_github_alert(alert)
+                logger.info(f"GitHub: {alert.message[:50]}...")
         except Exception as e:
             logger.error(f"Error checking GitHub: {e}")
+
+    async def send_github_alert(self, alert: GitHubAlert) -> None:
+        """Send a GitHub alert with optional action button."""
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        docker_config = self.config.get("docker", {})
+        vm_config = self.config.get("vm", {})
+        topic_id = docker_config.get("topic_id") or vm_config.get("topic_id")
+
+        if not self.bot or not self.bot._app:
+            return
+
+        kwargs = {
+            "chat_id": self.config["telegram"]["chat_id"],
+            "text": alert.message,
+            "parse_mode": "HTML",
+        }
+        if topic_id:
+            kwargs["message_thread_id"] = topic_id
+
+        # Add action button if specified
+        if alert.action:
+            keyboard = [[
+                InlineKeyboardButton(
+                    f"🔄 {alert.action_label}",
+                    callback_data=f"github_action_{alert.action}"
+                )
+            ]]
+            kwargs["reply_markup"] = InlineKeyboardMarkup(keyboard)
+
+        await self.bot._app.bot.send_message(**kwargs)
+
+    async def handle_github_action(self, action: str) -> tuple[bool, str]:
+        """Handle a GitHub-related action (e.g., restart container)."""
+        if action == "restart_auto_southwest":
+            try:
+                with SSHClient(**self._ssh_config) as ssh:
+                    # Pull latest image, update restart policy, and start
+                    cmd = (
+                        "docker pull jdholtz/auto-southwest-check-in:latest && "
+                        "docker update --restart=unless-stopped auto-southwest && "
+                        "docker start auto-southwest"
+                    )
+                    stdout, stderr, code = ssh._exec(cmd)
+                    if code == 0:
+                        return True, "auto-southwest updated and restarted!"
+                    else:
+                        return False, f"Failed: {stderr}"
+            except Exception as e:
+                return False, str(e)
+        return False, f"Unknown action: {action}"
 
     async def check_disk(self) -> None:
         """Perform a single disk check."""
@@ -214,6 +265,7 @@ class MediaServerHealthChecker:
             topic_id=self.config["telegram"].get("topic_id"),
             delete_callback=self._delete_file,
             refresh_callback=self._refresh_list,
+            github_action_callback=self.handle_github_action,
         )
 
         # Initialize Transmission watcher if configured
