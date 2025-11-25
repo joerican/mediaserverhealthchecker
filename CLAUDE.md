@@ -4,55 +4,69 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Media Server Health Checker - A Python application that monitors disk usage on a remote media server via SSH, sends Telegram alerts when disk is full, allows interactive file deletion through Telegram, and monitors Transmission torrent client.
+Media Server Health Checker - A Python application that monitors a remote media server via SSH, sending Telegram alerts for disk usage, Docker container issues, VM state changes, and Transmission torrent activity. Supports interactive file deletion through Telegram inline buttons.
 
 ## Commands
 
 ```bash
-# Run locally (for testing)
-python3 -m src.main
+# Run locally (requires venv)
+source venv/bin/activate && python3 -m src.main
 
-# Install as service
-./install.sh
-
-# Start/stop service
-launchctl load ~/Library/LaunchAgents/com.mediaserverhealthchecker.plist
+# Restart service after code changes
 launchctl unload ~/Library/LaunchAgents/com.mediaserverhealthchecker.plist
+launchctl load ~/Library/LaunchAgents/com.mediaserverhealthchecker.plist
 
 # View logs
 tail -f ~/Library/Logs/mediaserverhealthchecker.error.log
+
+# Install as service (first time only)
+./install.sh
 ```
 
 ## Architecture
 
+The app runs a single async loop in `main.py` that periodically checks multiple monitors and sends alerts to different Telegram topics.
+
 ```
 src/
-├── main.py               # Entry point, async monitoring loop, signal handling
-├── config.py             # YAML config loader (~/.config/mediaserverhealthchecker/config.yaml)
-├── ssh_client.py         # Paramiko-based SSH client for remote commands
-├── disk_monitor.py       # Threshold checking with cooldown state
-├── telegram_bot.py       # python-telegram-bot with inline keyboards for deletion
-├── transmission_client.py # Transmission RPC API client
-└── transmission_watcher.py # Auto-stop seeding, auto-remove after 24h
+├── main.py                 # Entry point, orchestrates all monitors
+├── config.py               # YAML config loader
+├── ssh_client.py           # Paramiko SSH client, used by disk/docker/vm monitors
+├── telegram_bot.py         # Bot with inline keyboards, callback handlers
+├── disk_monitor.py         # Threshold checking with cooldown state
+├── docker_monitor.py       # Container health/restart/stopped detection
+├── vm_monitor.py           # VirtualBox VM and USB device monitoring
+├── github_monitor.py       # Tracks GitHub issues for upstream fixes
+├── transmission_client.py  # Transmission RPC API client
+├── transmission_watcher.py # Auto-stop seeding, auto-remove logic
+└── log_rotation.py         # Truncate logs >10MB, cleanup >7 days
 ```
 
-**Disk Monitor Flow**: main.py runs async loop → SSHClient checks `df /` → DiskMonitor determines if alert needed → TelegramBot sends message with inline delete buttons → User clicks button → Confirmation → SSHClient deletes file
+**Monitor Pattern**: Each monitor (Docker, VM, GitHub) follows the same pattern:
+1. Takes a factory/config in `__init__`
+2. Maintains state in a dataclass (e.g., `DockerMonitorState`)
+3. Has a `check_*()` method returning list of alert messages
+4. First run captures baseline state without alerting
 
-**Transmission Flow**: main.py checks Transmission every 5 min → Stop seeding when 100% complete → Remove from list after 24 hours → Send notifications to Telegram topic
+**Telegram Topics**: Different monitors send to different Telegram forum topics:
+- Disk alerts → `telegram.topic_id`
+- Transmission → `transmission.topic_id`
+- Docker/VM/GitHub → `docker.topic_id` (shared "Server Health" topic)
 
 ## File Locations
 
-| File | Location | Description |
-|------|----------|-------------|
-| Config | `~/.config/mediaserverhealthchecker/config.yaml` | User config with API keys (NOT in repo) |
-| Service | `~/Library/LaunchAgents/com.mediaserverhealthchecker.plist` | macOS launchd service |
-| Logs | `~/Library/Logs/mediaserverhealthchecker.error.log` | Application logs |
+| File | Location |
+|------|----------|
+| Config | `~/.config/mediaserverhealthchecker/config.yaml` |
+| Service | `~/Library/LaunchAgents/com.mediaserverhealthchecker.plist` |
+| Logs | `~/Library/Logs/mediaserverhealthchecker.error.log` |
 
 ## Key Design Decisions
 
-- **Polling** for Telegram (not webhooks) since this runs locally
-- **SSH key auth only** - no password storage
-- **Safety**: Deletion restricted to configured `downloads_paths`
-- **Alert cooldown**: Prevents spam (default 1 hour between repeated alerts)
-- **Config outside repo**: Secrets stored in `~/.config/`, not committed to git
-- **Transmission API**: Direct HTTP RPC, no SSH tunnel needed
+- **SSH-based monitoring**: Docker/VM monitors execute commands via SSH, not local Docker API
+- **Polling for Telegram**: Uses polling (not webhooks) since this runs locally
+- **SSH key auth only**: No password storage
+- **Deletion safety**: File deletion restricted to configured `downloads_paths`
+- **Alert cooldown**: Prevents spam (1 hour between repeated disk alerts)
+- **Config outside repo**: All secrets in `~/.config/`, never committed
+- **GitHub action buttons**: When a monitored issue closes, inline button can trigger container restart

@@ -15,6 +15,9 @@ from .transmission_watcher import TransmissionWatcher
 from .docker_monitor import DockerMonitor
 from .vm_monitor import VMMonitor
 from .github_monitor import GitHubMonitor, GitHubAlert
+from .system_monitor import SystemMonitor
+from .mount_monitor import MountMonitor
+from .watchtower_monitor import WatchtowerMonitor
 from .log_rotation import rotate_logs, cleanup_old_logs
 
 logging.basicConfig(
@@ -38,6 +41,9 @@ class MediaServerHealthChecker:
         self.docker_monitor: Optional[DockerMonitor] = None
         self.vm_monitor: Optional[VMMonitor] = None
         self.github_monitor: Optional[GitHubMonitor] = None
+        self.system_monitor: Optional[SystemMonitor] = None
+        self.mount_monitor: Optional[MountMonitor] = None
+        self.watchtower_monitor: Optional[WatchtowerMonitor] = None
         self._running = False
         self._ssh_config = {
             "host": self.config["ssh"]["host"],
@@ -216,6 +222,45 @@ class MediaServerHealthChecker:
                 return False, str(e)
         return False, f"Unknown action: {action}"
 
+    async def check_system(self) -> None:
+        """Check system resources."""
+        if not self.system_monitor:
+            return
+
+        try:
+            messages = self.system_monitor.check_system()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"System: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking system: {e}")
+
+    async def check_mounts(self) -> None:
+        """Check NAS/network mounts."""
+        if not self.mount_monitor:
+            return
+
+        try:
+            messages = self.mount_monitor.check_mounts()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"Mount: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking mounts: {e}")
+
+    async def check_watchtower(self) -> None:
+        """Check for container updates."""
+        if not self.watchtower_monitor:
+            return
+
+        try:
+            messages = self.watchtower_monitor.check_updates()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"Watchtower: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking watchtower: {e}")
+
     async def check_disk(self) -> None:
         """Perform a single disk check."""
         try:
@@ -302,6 +347,36 @@ class MediaServerHealthChecker:
             )
             logger.info("GitHub monitor initialized")
 
+        # Initialize system monitor if configured
+        system_config = self.config.get("system", {})
+        if system_config.get("enabled"):
+            self.system_monitor = SystemMonitor(
+                ssh_client_factory=self._get_ssh_client,
+                ram_threshold=system_config.get("ram_threshold", 90),
+                swap_threshold=system_config.get("swap_threshold", 80),
+                load_threshold=system_config.get("load_threshold", 4.0),
+                temp_threshold=system_config.get("temp_threshold", 80.0),
+            )
+            logger.info("System monitor initialized")
+
+        # Initialize mount monitor if configured
+        mount_config = self.config.get("mounts", {})
+        if mount_config.get("enabled") and mount_config.get("paths"):
+            self.mount_monitor = MountMonitor(
+                ssh_client_factory=self._get_ssh_client,
+                mounts_to_monitor=mount_config.get("paths", []),
+            )
+            logger.info("Mount monitor initialized")
+
+        # Initialize watchtower monitor if configured
+        watchtower_config = self.config.get("watchtower", {})
+        if watchtower_config.get("enabled"):
+            self.watchtower_monitor = WatchtowerMonitor(
+                ssh_client_factory=self._get_ssh_client,
+                container_name=watchtower_config.get("container_name", "watchtower"),
+            )
+            logger.info("Watchtower monitor initialized")
+
         # Start bot
         await self.bot.start()
         logger.info("Telegram bot started")
@@ -326,6 +401,12 @@ class MediaServerHealthChecker:
             await self.check_vm()
         if self.github_monitor:
             await self.check_github()
+        if self.system_monitor:
+            await self.check_system()
+        if self.mount_monitor:
+            await self.check_mounts()
+        if self.watchtower_monitor:
+            await self.check_watchtower()
 
         try:
             while self._running:
@@ -334,6 +415,9 @@ class MediaServerHealthChecker:
                 await self.check_docker()
                 await self.check_vm()
                 await self.check_github()
+                await self.check_system()
+                await self.check_mounts()
+                await self.check_watchtower()
                 await asyncio.sleep(check_interval)
         except asyncio.CancelledError:
             logger.info("Monitoring cancelled")
