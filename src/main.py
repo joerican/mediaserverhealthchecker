@@ -12,6 +12,7 @@ from .ssh_client import SSHClient
 from .disk_monitor import DiskMonitor
 from .telegram_bot import TelegramBot
 from .transmission_watcher import TransmissionWatcher
+from .log_rotation import rotate_logs, cleanup_old_logs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -126,6 +127,10 @@ class MediaServerHealthChecker:
 
     async def run(self) -> None:
         """Run the main monitoring loop."""
+        # Rotate logs on startup (keep max 7 days / 10MB)
+        rotate_logs(max_days=7)
+        cleanup_old_logs(max_days=7)
+
         # Validate config
         if not self.config["telegram"]["bot_token"]:
             logger.error("Telegram bot_token not configured!")
