@@ -38,6 +38,9 @@ src/
 ├── vm_monitor.py           # VirtualBox VM and USB device monitoring
 ├── github_monitor.py       # Tracks GitHub issues for upstream fixes
 ├── ha_monitor.py           # HomeAssistant integration monitoring with auto-fix
+├── system_monitor.py       # RAM, swap, load, temperature monitoring
+├── mount_monitor.py        # NAS/network mount availability
+├── watchtower_monitor.py   # Docker container update notifications
 ├── transmission_client.py  # Transmission RPC API client
 ├── transmission_watcher.py # Auto-stop seeding, auto-remove logic
 └── log_rotation.py         # Truncate logs >10MB, cleanup >7 days
@@ -52,7 +55,7 @@ src/
 **Telegram Topics**: Different monitors send to different Telegram forum topics:
 - Disk alerts → `telegram.topic_id`
 - Transmission → `transmission.topic_id`
-- Docker/VM/GitHub → `docker.topic_id` (shared "Server Health" topic)
+- Docker/VM/GitHub/HA/System/Mounts/Watchtower → `docker.topic_id` (shared "Server Health" topic)
 
 ## File Locations
 
@@ -71,3 +74,31 @@ src/
 - **Alert cooldown**: Prevents spam (1 hour between repeated disk alerts)
 - **Config outside repo**: All secrets in `~/.config/`, never committed
 - **GitHub action buttons**: When a monitored issue closes, inline button can trigger container restart
+- **HA auto-fix**: When Z-Wave JS or SmartThings integrations fail, attempts reload then VM reboot (1x/hour max)
+
+## HomeAssistant Monitor
+
+The `ha_monitor.py` module monitors HA integrations via the REST API:
+
+1. Checks integration state every 5 minutes
+2. Detects `setup_retry`, `setup_error`, or `failed` states
+3. First attempts API reload of the integration
+4. If reload fails, reboots the HA VM via VBoxManage
+5. Rate limits VM reboots to 1x per hour (configurable)
+
+Currently monitoring:
+- `zwave_js` - Z-Wave devices (garage doors, locks, sensors)
+- `smartthings` - Samsung SmartThings devices
+
+Config in `~/.config/mediaserverhealthchecker/config.yaml`:
+```yaml
+homeassistant:
+  enabled: true
+  url: http://192.168.86.67:8123
+  token: '<long-lived-access-token>'
+  vm_name: ha
+  reboot_cooldown: 3600  # seconds
+  integrations:
+    - zwave_js
+    - smartthings
+```
