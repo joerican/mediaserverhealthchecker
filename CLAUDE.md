@@ -37,6 +37,7 @@ src/
 ├── docker_monitor.py       # Container health/restart/stopped detection
 ├── vm_monitor.py           # VirtualBox VM and USB device monitoring
 ├── github_monitor.py       # Tracks GitHub issues for upstream fixes
+├── ha_monitor.py           # HomeAssistant integration monitoring with auto-fix
 ├── transmission_client.py  # Transmission RPC API client
 ├── transmission_watcher.py # Auto-stop seeding, auto-remove logic
 └── log_rotation.py         # Truncate logs >10MB, cleanup >7 days
