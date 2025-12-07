@@ -18,6 +18,7 @@ from .github_monitor import GitHubMonitor, GitHubAlert
 from .system_monitor import SystemMonitor
 from .mount_monitor import MountMonitor
 from .watchtower_monitor import WatchtowerMonitor
+from .ha_monitor import HAMonitor
 from .log_rotation import rotate_logs, cleanup_old_logs
 
 logging.basicConfig(
@@ -44,6 +45,7 @@ class MediaServerHealthChecker:
         self.system_monitor: Optional[SystemMonitor] = None
         self.mount_monitor: Optional[MountMonitor] = None
         self.watchtower_monitor: Optional[WatchtowerMonitor] = None
+        self.ha_monitor: Optional[HAMonitor] = None
         self._running = False
         self._ssh_config = {
             "host": self.config["ssh"]["host"],
@@ -346,6 +348,19 @@ class MediaServerHealthChecker:
         except Exception as e:
             logger.error(f"Error checking watchtower: {e}")
 
+    async def check_ha(self) -> None:
+        """Check HomeAssistant integrations."""
+        if not self.ha_monitor:
+            return
+
+        try:
+            messages = self.ha_monitor.check_integrations()
+            for msg in messages:
+                await self.send_server_health_message(msg)
+                logger.info(f"HA: {msg[:50]}...")
+        except Exception as e:
+            logger.error(f"Error checking HA: {e}")
+
     async def check_disk(self) -> None:
         """Perform a single disk check."""
         try:
@@ -464,6 +479,19 @@ class MediaServerHealthChecker:
             )
             logger.info("Watchtower monitor initialized")
 
+        # Initialize HomeAssistant monitor if configured
+        ha_config = self.config.get("homeassistant", {})
+        if ha_config.get("enabled") and ha_config.get("token"):
+            self.ha_monitor = HAMonitor(
+                ha_url=ha_config.get("url", "http://192.168.86.67:8123"),
+                ha_token=ha_config.get("token"),
+                ssh_client_factory=self._get_ssh_client,
+                vm_name=ha_config.get("vm_name", "ha"),
+                reboot_cooldown=ha_config.get("reboot_cooldown", 3600),
+                integrations_to_monitor=ha_config.get("integrations", ["zwave_js"]),
+            )
+            logger.info("HomeAssistant monitor initialized")
+
         # Start bot
         await self.bot.start()
         logger.info("Telegram bot started")
@@ -489,6 +517,8 @@ class MediaServerHealthChecker:
             await self.check_mounts()
         if self.watchtower_monitor:
             await self.check_watchtower()
+        if self.ha_monitor:
+            await self.check_ha()
 
         try:
             while self._running:
@@ -500,6 +530,7 @@ class MediaServerHealthChecker:
                 await self.check_system()
                 await self.check_mounts()
                 await self.check_watchtower()
+                await self.check_ha()
                 await asyncio.sleep(check_interval)
         except asyncio.CancelledError:
             logger.info("Monitoring cancelled")
